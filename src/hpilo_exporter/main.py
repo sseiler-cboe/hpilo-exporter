@@ -1,23 +1,22 @@
 """
-Entrypoint for the application
+Entrypoint for the exporter
 """
 
 import argparse
 
-from hpilo_exporter.exporter import ILOExporterServer
+from hpilo_exporter.exporter import ILOMetricsExporter
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Exports ilo heath_at_a_glance state to Prometheus')
+    parser = argparse.ArgumentParser(description='Serves captured health metrics from the system iLO to Prometheus.')
 
-    parser.add_argument('--address', type=str, dest='address', default='0.0.0.0', help='address to serve on')
-    parser.add_argument('--port', type=int, dest='port', default='9416', help='port to bind')
-    parser.add_argument('--endpoint', type=str, dest='endpoint', default='/metrics',
-                        help='endpoint where metrics will be published')
+    parser.add_argument('--metrics-file', type=str, default='hpiloMetrics.prom', help='file to read metrics from')
+    parser.add_argument('--refresh-interval', type=int, default=180)
+    parser.add_argument('--web-listen-port', default=9416, type=int)
 
     args = parser.parse_args()
 
-    exporter = ILOExporterServer(**vars(args))
+    exporter = ILOMetricsExporter(**vars(args))
     exporter.run()
 
 
