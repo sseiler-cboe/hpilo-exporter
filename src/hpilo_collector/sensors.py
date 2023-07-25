@@ -35,7 +35,7 @@ class Sensor(object):
     the data that is presented out as prometheus metrics.
     """
     missingStatus = [ 'Not Installed', 'Not Present' ]
-    goodStatus = [ 'OK', 'Good, In Use' ]
+    goodStatus = [ 'OK', 'Good, In Use', 'Present, Unused' ]
 
     @property
     def status(self):
@@ -64,14 +64,13 @@ class Sensor(object):
 
         return True
 
-    @property
-    def promMetrics(self):
+    def generateMetrics(self):
         """
         Generate the metrics that will go into the global registry.
         Use the contents of the promData dictionary to populate the labels
         and set the value to the object's value attribute.
         """
-        return self.gauge.labels(**self.promData).set(self.value)
+        self.gauge.labels(**self.promData).set(self.value)
 
 
 class SystemSensor(Sensor):
@@ -100,18 +99,30 @@ class SystemSensor(Sensor):
         self.promData['fans'] = fans['status']
         self.promData['fan_redundancy'] = fans['redundancy']
         self.promData['memory'] = memory['status']
-        self.promData['network'] = network['status']
         self.promData['power_supplies'] = power_supplies['status']
         self.promData['ps_redundancy'] = power_supplies['redundancy']
         self.promData['processor'] = processor['status']
         self.promData['storage'] = storage['status']
         self.promData['temperature'] = temperature['status']
     
+        self.promData['network'] = network['status']
+        if network['status'] in ['OK', 'Unknown']:
+          self.promData['network'] = 'OK'
+
+        self.setStatus()
+
+
+    def updateMetrics(self):
+        self.gauge.clear()
+        self.setStatus()
+        self.generateMetrics()
+
+    def setStatus(self):
         self.value = 1
         for status in self.promData.values():
             if status not in self.healthy_states and status not in self.missingStatus:
                 self.value = self.value * 0
-        
+
 
 class PowerSensor(Sensor):
     """
@@ -253,6 +264,146 @@ class MemorySensor(Sensor):
         if self.healthy:
             self.value = 1
 
+
+class StorageControllerSensor(Sensor):
+    """
+    This sensor details storage controller health information.
+
+    The sensor value is its health status. Additional status 
+    values are available for cache and encryption subsystems.
+
+    Labels provide information about the controller including 
+    its serial number, firmware verstion, and model.
+    """
+
+    gauge = Gauge('hpilo_storage_controller', 'HP iLO storage controller status', 
+                  ['controller_status', 'cache_module_status', 'serial_number', 'cache_module_memory', 'model', 'fw_version', 
+                   'status', 'cache_module_serial_num', 'encryption_status', 'encryption_self_test_status', 'encryption_csp_status'])
+
+    def __init__(self, label, status, controller_status, serial_number, model, fw_version, cache_module_status, cache_module_serial_num, cache_module_memory, encryption_status, encryption_self_test_status, encryption_csp_status, drive_enclosures, logical_drives):
+        self.promData = {}
+        self.promData['status'] = status
+        self.promData['controller_status'] = controller_status
+        self.promData['serial_number'] = serial_number
+        self.promData['model'] = model
+        self.promData['fw_version'] = fw_version
+        self.promData['cache_module_status'] = cache_module_status
+        self.promData['cache_module_serial_num'] = cache_module_serial_num
+        self.promData['cache_module_memory'] = cache_module_memory
+        self.promData['encryption_status'] = encryption_status
+        self.promData['encryption_self_test_status'] = encryption_self_test_status
+        self.promData['encryption_csp_status'] = encryption_csp_status
+
+        self.enclosures = []
+        for enclosure in drive_enclosures:
+            self.enclosures.append(StorageEnclosureSensor(**enclosure))
+
+        self.logical_drives = []
+        for logical_drive in logical_drives:
+            self.logical_drives.append(LogicalDriveSensor(**logical_drive))
+
+        self.value = 0
+        if self.healthy:
+            self.value = 1
+
+    @property
+    def healthy(self):
+        """
+        Check the status to see if it matches one of the healthy strings.
+        """
+        if self.promData['cache_module_status'] in self.goodStatus and self.promData['controller_status'] in self.goodStatus:
+            self.promData['status'] = 'OK'
+
+            if self.promData['encryption_status'] != 'Not Enabled':
+                if self.promData['encryption_status'] in self.goodStatus and self.promData['encryption_self_test_status'] in self.goodStatus and self.promData['encryption_csp_status'] in self.goodStatus:
+                    self.promData['status'] = 'OK'
+                else:
+                    self.promData['status'] = 'Degraded'
+        else:
+            self.promData['status'] = 'Degraded'
+
+        for enclosure in self.enclosures:
+            if not enclosure.healthy:
+                self.promData['status'] = 'Degraded'
+
+        for logical_drive in self.logical_drives:
+            if not logical_drive.healthy:
+                self.promData['status'] = 'Degraded'
+
+        if self.promData['status'] in self.goodStatus:
+            return True
+
+        return False
+
+
+class LogicalDriveSensor(Sensor):
+    """
+    This sensor details logical drive information.
+
+    The sensor value is its health status. Labels provide information about the drive
+    including its encryption status, fault tolerance, drive type, and overall status.
+    """
+    gauge = Gauge('hpilo_logical_drive', 'HP iLO logical drive status', ['capacity', 'encryption_status', 'fault_tolerance', 'identifier', 'drive_type', 'status'])
+
+    def __init__(self, capacity, encryption_status, fault_tolerance, label, logical_drive_type, physical_drives, status):
+        self.promData = {}
+        self.promData['capacity'] = capacity
+        self.promData['encryption_status'] = encryption_status
+        self.promData['fault_tolerance'] = fault_tolerance
+        self.promData['identifier'] = label
+        self.promData['drive_type'] = logical_drive_type
+        self.promData['status'] = status
+
+        self.disks = []
+        for drive in physical_drives:
+            drive['logical_drive'] = self.promData['identifier']
+            self.disks.append(DiskSensor(**drive))
+
+        self.value = 0
+        if self.healthy:
+            self.value = 1
+
+    @property
+    def healthy(self):
+        """
+        Automatically return true if the sensor reports true.
+        However, if the sensor is not reporting healthy, check all
+        drives individually and return true if all drives are healthy.
+        This is done to avoid false issues such as drive authentication
+        failing due to use of non-OEM drives.
+        """
+        if self.status in self.goodStatus:
+            return True
+
+        for drive in self.disks:
+            if not drive.healthy:
+                return False
+
+        return True
+
+
+class StorageEnclosureSensor(Sensor):
+    """
+    This sensor details storage enclosure information.
+
+    The sensor value is its health status. Labels provide information about the enclosure
+    including its serial number, model number, firmware version, and location.
+    """
+    gauge = Gauge('hpilo_storage_enclosure', 'HP iLO storage enclosure status', ['drive_bay', 'model_number', 'serial_number', 'fw_version', 'status'])
+
+    def __init__(self, drive_bay, fw_version, label, model_number, serial_number, status):
+        self.promData = {}
+        self.promData['drive_bay'] = drive_bay
+        self.promData['model_number'] = model_number
+        self.promData['serial_number'] = serial_number
+        self.promData['fw_version'] = fw_version
+        self.promData['status'] = status
+
+        self.value = 0
+        if self.healthy:
+            self.value = 1
+
+
 class DiskSensor(Sensor):
     """
     This sensor details disk information.
@@ -260,9 +411,10 @@ class DiskSensor(Sensor):
     The sensor value is its health status. Labels provide information about the disk
     including its serial number and location.
     """
-    gauge = Gauge('hpilo_disk', 'HP iLO disk status', ['capacity', 'media_type', 'serial_number', 'model', 'fw_version', 'location', 'status'])
+    goodStatus = [ 'OK', 'Good, In Use', 'Present, Unused', 'Degraded (Not authenticated)' ]
+    gauge = Gauge('hpilo_disk', 'HP iLO disk status', ['capacity', 'media_type', 'serial_number', 'model', 'fw_version', 'location', 'status', 'logical_drive'])
 
-    def __init__(self, capacity, drive_configuration, encryption_status, fw_version, label, location, marketing_capacity, media_type, model, serial_number, status):
+    def __init__(self, capacity, drive_configuration, encryption_status, fw_version, label, location, marketing_capacity, media_type, model, serial_number, status, logical_drive):
         self.promData = {}
         self.promData['capacity'] = capacity
         self.promData['media_type'] = media_type
@@ -271,6 +423,7 @@ class DiskSensor(Sensor):
         self.promData['fw_version'] = fw_version
         self.promData['location'] = location
         self.promData['status'] = status
+        self.promData['logical_drive'] = logical_drive
 
         self.value = 0
         if self.healthy:
@@ -308,8 +461,7 @@ class TemperatureSensor(Sensor):
 
         self.value = currentreading[0]
 
-    @property
-    def promMetrics(self):
+    def generateMetrics(self):
         """
         Generate the metrics that will go into the global registry.
         Use the contents of the promData dictionary to populate the labels
@@ -323,4 +475,3 @@ class TemperatureSensor(Sensor):
           self.gauges['hpilo_temperature_critical'].labels(name=self.promData['name'], location=self.promData['location'], unit=self.promData['unit']).set(self.promData['critical'])
         if self.promData['caution'] > 0:
           self.gauges['hpilo_temperature_caution'].labels(name=self.promData['name'], location=self.promData['location'], unit=self.promData['unit']).set(self.promData['caution'])
-        return self.gauges.values()

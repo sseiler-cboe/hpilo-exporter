@@ -48,7 +48,15 @@ class ILOMetrics(object):
 
     @property
     def server_name(self):
-        return self.get_server_name()
+        return self.ilo.get_server_name()
+
+    @property
+    def ilo_fqdn(self):
+        return self.ilo.get_server_fqdn()
+
+    @property
+    def ilo_url(self):
+        return 'https://' + self.ilo_fqdn + '/'
 
     @property
     def embedded_health(self):
@@ -67,6 +75,10 @@ class ILOMetrics(object):
         fwMetrics.labels(**fwData).set(1)
 
     def get_metrics(self):
+        redo_system_check = False
+
+        iloFqdn = Gauge('hpilo_connection_data', 'Fully Qualified Domain Name and URL for iLO', ['fqdn', 'url'])
+        iloFqdn.labels(fqdn=self.ilo_fqdn, url=self.ilo_url).set(1)
         self.subsystems['memory'] =  metrics.MemoryMetrics(self.embedded_health['memory']['memory_details'])
         self.subsystems['temperature'] = metrics.TemperatureMetrics(self.embedded_health['temperature'])
         self.subsystems['power'] = metrics.PowerMetrics(self.embedded_health['power_supply_summary'])
@@ -76,11 +88,36 @@ class ILOMetrics(object):
         self.subsystems['power_supplies'] = metrics.PowerSupplyMetrics(self.embedded_health['power_supplies'])
         self.subsystems['processors'] = metrics.CPUMetrics(self.embedded_health['processors'])
         if self.embedded_health['storage']:
-            disks = self.find_key(self.embedded_health['storage'], 'physical_drives')
-            if disks:
-                self.subsystems['disks'] = metrics.DiskMetrics(disks['physical_drives'])
+            self.subsystems['storage'] = metrics.StorageMetrics(self.embedded_health['storage'])
+            # See note below
+            redo_system_check = True
+
+
         for subsys in self.subsystems.values():
             subsys.populate_sensors()
+
+        """
+        NOTE:
+        This is to deal with the spurious storage errors that occur whenever a non-HPE drive is used
+        in the system. The drive will not authenticate and show as being degraded. This is a workaround
+        to cope with that circumstance. The storage metrics discard that issue, but we need the update
+        to propagate up to the system check so that the storage subsystem does not show as being
+        degraded
+        """
+        if redo_system_check:
+            systemMetrics = self.subsystems['system']
+            systemSensor = systemMetrics.sensors[0]
+
+            storageStatus = 1
+            for controller in self.subsystems['storage'].sensors:
+                storageStatus = storageStatus * controller.value
+
+            if storageStatus == 1:
+                systemSensor.promData['storage'] = 'OK'
+            else:
+                systemSensor.promData['storage'] = 'Degraded'
+
+            systemSensor.updateMetrics()
 
         self.get_firmware_metrics()
             

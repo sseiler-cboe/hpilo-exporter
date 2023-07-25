@@ -6,6 +6,7 @@ Subsystems available:
   - Memory
   - Processors
   - Network
+  - Storage
   - Temperature
   - Fans
 """
@@ -23,8 +24,6 @@ class SensorMetrics(object):
     The raw sensor data will be stored in the sensorData attribute. This will include all
     data for all of that sensor type that is present, e.g. the set of all temperature sensor
     data.
-
-    Individual sensors metrics are stored in the sensors attribute.
 
     Subclasses may override the populate_sensors method if the data does not fit into 
     the list of dictionaries paradigm.
@@ -49,7 +48,8 @@ class SensorMetrics(object):
             mySensor = self.SENSOR_TYPE(**sensor)
             try:
                 if mySensor.installed:
-                    self.sensors.append(mySensor.promMetrics)
+                    self.sensors.append(mySensor)
+                    mySensor.generateMetrics()
             except ValueError:
                 pass
 
@@ -99,7 +99,8 @@ class MemoryMetrics(SensorMetrics):
 
                 try:
                     if memorySensor.installed:
-                        self.sensors.append(memorySensor.promMetrics)
+                        self.sensors.append(memorySensor)
+                        memorySensor.generateMetrics()
                 except ValueError:
                     pass
 
@@ -188,7 +189,8 @@ class PowerMetrics(SensorMetrics):
 
     def populate_sensors(self):
         sensor = sensors.PowerSensor(**self.sensorData)
-        self.sensors.append(sensor.promMetrics)
+        self.sensors.append(sensor)
+        sensor.generateMetrics()
             
 
 class SystemMetrics(SensorMetrics):
@@ -205,5 +207,26 @@ class SystemMetrics(SensorMetrics):
 
     def populate_sensors(self):
         sensor = sensors.SystemSensor(**self.sensorData)
-        self.sensors.append(sensor.promMetrics)
+        self.sensors.append(sensor)
+        sensor.generateMetrics()
 
+class StorageMetrics(SensorMetrics):
+    SENSOR_TYPE = sensors.StorageControllerSensor
+
+    def __init__(self, data):
+        super().__init__(data)
+        self.controllerIds = self.sensorData.keys()
+
+    def populate_sensors(self):
+        for controllerId in self.controllerIds:
+            controller = sensors.StorageControllerSensor(**self.sensorData[controllerId])
+            self.sensors.append(controller)
+            controller.generateMetrics()
+
+            for enclosure in controller.enclosures:
+                enclosure.generateMetrics()
+
+            for logical_drive in controller.logical_drives:
+                logical_drive.generateMetrics()
+                for disk in logical_drive.disks:
+                    disk.generateMetrics()
