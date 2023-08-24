@@ -275,12 +275,14 @@ class StorageControllerSensor(Sensor):
     Labels provide information about the controller including 
     its serial number, firmware verstion, and model.
     """
+    goodStatus = [ 'OK', 'Good, In Use', 'Present, Unused', 'Not Installed' ]
+    cacheGoodStatus = [ 'OK', 'Good, In Use', 'Present, Unused', 'Not Installed', 'Other' ]
 
     gauge = Gauge('hpilo_storage_controller', 'HP iLO storage controller status', 
                   ['controller_status', 'cache_module_status', 'serial_number', 'cache_module_memory', 'model', 'fw_version', 
                    'status', 'cache_module_serial_num', 'encryption_status', 'encryption_self_test_status', 'encryption_csp_status'])
 
-    def __init__(self, label, status, controller_status, serial_number, model, fw_version, cache_module_status, cache_module_serial_num, cache_module_memory, encryption_status, encryption_self_test_status, encryption_csp_status, drive_enclosures, logical_drives):
+    def __init__(self, label, status, controller_status, serial_number, model, fw_version, encryption_status, encryption_self_test_status, encryption_csp_status, drive_enclosures=None, logical_drives=None, cache_module_status='Not Installed', cache_module_serial_num='N/A', cache_module_memory='N/A'):
         self.promData = {}
         self.promData['status'] = status
         self.promData['controller_status'] = controller_status
@@ -295,12 +297,14 @@ class StorageControllerSensor(Sensor):
         self.promData['encryption_csp_status'] = encryption_csp_status
 
         self.enclosures = []
-        for enclosure in drive_enclosures:
-            self.enclosures.append(StorageEnclosureSensor(**enclosure))
+        if drive_enclosures:
+            for enclosure in drive_enclosures:
+                self.enclosures.append(StorageEnclosureSensor(**enclosure))
 
         self.logical_drives = []
-        for logical_drive in logical_drives:
-            self.logical_drives.append(LogicalDriveSensor(**logical_drive))
+        if logical_drives:
+            for logical_drive in logical_drives:
+                self.logical_drives.append(LogicalDriveSensor(**logical_drive))
 
         self.value = 0
         if self.healthy:
@@ -311,7 +315,7 @@ class StorageControllerSensor(Sensor):
         """
         Check the status to see if it matches one of the healthy strings.
         """
-        if self.promData['cache_module_status'] in self.goodStatus and self.promData['controller_status'] in self.goodStatus:
+        if self.promData['cache_module_status'] in self.cacheGoodStatus and self.promData['controller_status'] in self.goodStatus:
             self.promData['status'] = 'OK'
 
             if self.promData['encryption_status'] != 'Not Enabled':
@@ -391,7 +395,7 @@ class StorageEnclosureSensor(Sensor):
     """
     gauge = Gauge('hpilo_storage_enclosure', 'HP iLO storage enclosure status', ['drive_bay', 'model_number', 'serial_number', 'fw_version', 'status'])
 
-    def __init__(self, drive_bay, fw_version, label, model_number, serial_number, status):
+    def __init__(self, drive_bay, label, status, fw_version='N/A', model_number='N/A', serial_number='N/A'):
         self.promData = {}
         self.promData['drive_bay'] = drive_bay
         self.promData['model_number'] = model_number
