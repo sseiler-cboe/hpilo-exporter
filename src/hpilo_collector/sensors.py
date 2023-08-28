@@ -282,7 +282,7 @@ class StorageControllerSensor(Sensor):
                   ['controller_status', 'cache_module_status', 'serial_number', 'cache_module_memory', 'model', 'fw_version', 
                    'status', 'cache_module_serial_num', 'encryption_status', 'encryption_self_test_status', 'encryption_csp_status'])
 
-    def __init__(self, label, status, controller_status, serial_number, model, fw_version, encryption_status, encryption_self_test_status, encryption_csp_status, drive_enclosures=None, logical_drives=None, cache_module_status='Not Installed', cache_module_serial_num='N/A', cache_module_memory='N/A'):
+    def __init__(self, label, status, controller_status, serial_number, model, fw_version, encryption_status='Not Enabled', encryption_self_test_status='Not Enabled', encryption_csp_status='Not Enabled', drive_enclosures=None, logical_drives=None, cache_module_status='Not Installed', cache_module_serial_num='N/A', cache_module_memory='N/A'):
         self.promData = {}
         self.promData['status'] = status
         self.promData['controller_status'] = controller_status
